@@ -1,89 +1,45 @@
-version: "3.9"
-
 services:
-  #  API Gateway 
-  gateway:
-    build: ./api_gateway
-    container_name: api_gateway
-    ports:
-      - "8000:8000"
-    env_file:
-      - ./api_gateway/.env
-    depends_on:
-      - auth
-      - task
-      - notification
-
-  # Auth Service 
-  auth:
-    build: ./auth_service
-    container_name: auth_service
-    ports:
-      - "8001:8000"
-    env_file:
-      - ./auth_service/.env
-    depends_on:
-      - postgres
-
-  # Task Service 
-  task:
-    build: ./task_service
-    container_name: task_service
-    ports:
-      - "8002:8000"
-    env_file:
-      - ./task_service/.env
-    depends_on:
-      - mysql
-      - auth
-
-  # Notification Service 
-  notification:
-    build: ./notification_service
-    container_name: notification_service
-    ports:
-      - "8003:8000"
-    env_file:
-      - ./notification_service/.env
-    depends_on:
-      - rabbitmq
-
-  # PostgreSQL for Auth Service 
-  postgres:
+  postgres_db:
     image: postgres:15
-    container_name: postgres_db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: auth_db
+      POSTGRES_DB: task_manager
     ports:
-      - "5432:5432"
+      - "5432:5432"   
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # MySQL for Task Service 
-  mysql:
-    image: mysql:8.0
-    container_name: mysql_db
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: task_db
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-
-  # RabbitMQ for Notification Service
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: rabbitmq_broker
     ports:
-      - "5672:5672"   # broker
-      - "15672:15672" # management UI
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD-SHELL","rabbitmqctl status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth_service:
+    build: ./auth_service
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    environment:
+      - SQLALCHEMY_DATABASE_URL=${SQLALCHEMY_DATABASE_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+    ports:
+      - "8001:8000"
 
 volumes:
-  postgres_data:
-  mysql_data:
-  rabbitmq_data:
+  pgdata:
