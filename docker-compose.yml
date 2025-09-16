@@ -1,45 +1,87 @@
+version: '3.8'
+
 services:
+  # PostgreSQL Database for Auth Service
   postgres_db:
     image: postgres:15
+    container_name: postgres_db
     environment:
+      POSTGRES_DB: task_manager
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: task_manager
     ports:
-      - "5432:5432"   
+      - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U postgres"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d task_manager"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
+  # MySQL Database for Task Service
+  mysql_db:
+    image: mysql:latest
+    container_name: mysql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: task_manager
+      MYSQL_USER: taskuser
+      MYSQL_PASSWORD: taskpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # RabbitMQ for Message Queue
   rabbitmq:
     image: rabbitmq:3-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
     ports:
       - "5672:5672"
       - "15672:15672"
-    healthcheck:
-      test: ["CMD-SHELL","rabbitmqctl status"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app_network
 
+  # Auth Service
   auth_service:
     build: ./auth_service
+    container_name: auth_service
+    ports:
+      - "8001:8000"
+    environment:
+      - SQLALCHEMY_DATABASE_URL=postgresql+psycopg2://postgres:postgres@postgres_db:5432/task_manager
+      - SECRET_KEY=your-super-secret-key-change-this-in-production-123456789
+      - ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
     depends_on:
       postgres_db:
         condition: service_healthy
-      rabbitmq:
-        condition: service_started
-    environment:
-      - SQLALCHEMY_DATABASE_URL=${SQLALCHEMY_DATABASE_URL}
-      - SECRET_KEY=${SECRET_KEY}
-      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
-      - RABBITMQ_URL=${RABBITMQ_URL}
-    ports:
-      - "8001:8000"
+    restart: unless-stopped
+    networks:
+      - app_network
 
+# Define the network
+networks:
+  app_network:
+    driver: bridge
+
+# Define volumes for data persistence
 volumes:
-  pgdata:
+  postgres_data:
+  mysql_data:
+  rabbitmq_data:
