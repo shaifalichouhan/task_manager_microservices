@@ -5,9 +5,10 @@ Handles all environment variables and application settings.
 import os
 from typing import Optional
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
 load_dotenv()
 
 
@@ -75,11 +76,13 @@ class SecuritySettings(BaseSettings):
 class Settings(BaseSettings):
     """Main application settings."""
     
+    # Service information
     service_name: str = Field(default="task_service", description="Service name")
     service_version: str = Field(default="1.0.0", description="Service version")
     debug: bool = Field(default=False, description="Debug mode")
     log_level: str = Field(default="INFO", description="Logging level")
     
+    # Nested settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     auth_service: AuthServiceSettings = Field(default_factory=AuthServiceSettings)
     api: APISettings = Field(default_factory=APISettings)

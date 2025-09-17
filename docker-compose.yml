@@ -77,14 +77,14 @@ services:
     
     # Add this to your existing docker-compose.yml
   task_service:
-    build: ./task_service
+    build:
+      context: ./task_service
+      dockerfile: Dockerfile
     container_name: task_service
     ports:
       - "8002:8000"
-    environment:
-      - DATABASE_URL=mysql+pymysql://taskuser:taskpassword@mysql_db:3306/task_manager
-      - AUTH_SERVICE_URL=http://auth_service:8000
-      - DEBUG=True
+    volumes:
+      - ./task_service/.env:/app/.env
     depends_on:
       mysql_db:
         condition: service_healthy
