@@ -74,6 +74,25 @@ services:
     restart: unless-stopped
     networks:
       - app_network
+    
+    # Add this to your existing docker-compose.yml
+  task_service:
+    build: ./task_service
+    container_name: task_service
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://taskuser:taskpassword@mysql_db:3306/task_manager
+      - AUTH_SERVICE_URL=http://auth_service:8000
+      - DEBUG=True
+    depends_on:
+      mysql_db:
+        condition: service_healthy
+      auth_service:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - app_network
 
 # Define the network
 networks:
