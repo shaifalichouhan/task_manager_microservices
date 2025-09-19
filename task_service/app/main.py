@@ -1,217 +1,129 @@
-"""
-Task Service - Main application module.
-Professional microservice for task management with JWT authentication integration.
-"""
-import asyncio
 import logging
 import time
-from contextlib import asynccontextmanager
-from typing import Dict, Any
-
-from fastapi import FastAPI, Request, HTTPException, status
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy.exc import OperationalError
-
-from .core.config import get_settings
-from .core.database import create_tables, check_database_connection, get_database_info
-from .core.auth import auth_service
-# Note: Import routers when we create them
-# from .routers import tasks
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get settings
-settings = get_settings()
-
-
-async def startup_tasks():
-    """Execute startup tasks with proper error handling."""
-    logger.info("🚀 Starting Task Service...")
-    logger.info(f"Service: {settings.service_name} v{settings.service_version}")
-    logger.info(f"Environment: {'Development' if settings.debug else 'Production'}")
-    
-    # Initialize database with retry logic
-    max_retries = 10
-    retry_delay = 5
-    
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"Attempting database connection (attempt {attempt + 1}/{max_retries})")
-            
-            # Check database connection
-            if check_database_connection():
-                logger.info("✅ Database connection established")
-                
-                # Create tables
-                create_tables()
-                logger.info("✅ Database tables initialized")
-                
-                # Log database info
-                db_info = get_database_info()
-                logger.info(f"Database: {db_info.get('database_name')} ({db_info.get('mysql_version')})")
-                
-                break
-            else:
-                raise OperationalError("Database connection failed", None, None)
-                
-        except OperationalError as e:
-            logger.warning(f"Database connection failed (attempt {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("❌ Failed to connect to database after all retries")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database connection failed"
-                )
-        except Exception as e:
-            logger.error(f"Unexpected error during startup: {e}")
-            raise
-    
-    # Check Auth Service connectivity
-    try:
-        auth_healthy = await auth_service.health_check()
-        if auth_healthy:
-            logger.info("✅ Auth Service connection verified")
-        else:
-            logger.warning("⚠️  Auth Service is not responding (service will continue)")
-    except Exception as e:
-        logger.warning(f"⚠️  Could not verify Auth Service: {e} (service will continue)")
-    
-    logger.info("✅ Task Service startup completed successfully")
-
-
-async def shutdown_tasks():
-    """Execute shutdown tasks."""
-    logger.info("🛑 Shutting down Task Service...")
-    # Add any cleanup tasks here
-    logger.info("✅ Task Service shutdown completed")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Manage application lifespan events."""
-    # Startup
-    await startup_tasks()
-    yield
-    # Shutdown
-    await shutdown_tasks()
-
-
-# Create FastAPI application with professional configuration
+# Create FastAPI application
 app = FastAPI(
-    title=settings.service_name.title().replace('_', ' '),
-    description="Professional microservice for task management with JWT authentication",
-    version=settings.service_version,
-    docs_url="/docs" if settings.debug else None,
-    redoc_url="/redoc" if settings.debug else None,
-    openapi_url="/openapi.json" if settings.debug else None,
-    lifespan=lifespan
+    title="Task Service",
+    version="1.0.0",
+    description="Task Management Microservice"
 )
 
-
-# Add middleware stack
-app.add_middleware(
-    GZipMiddleware,
-    minimum_size=1000
-)
-
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.debug else ["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Import and initialize components with error handling
+try:
+    from .core.config import get_settings
+    settings = get_settings()
+    logger.info("Settings loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load settings: {e}")
+    # Create minimal settings
+    class MinimalSettings:
+        API_PREFIX = "/api/v1"
+    settings = MinimalSettings()
 
-@app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):
-    """Log all incoming requests with timing."""
-    start_time = time.time()
+try:
+    from .core.database import init_db, check_db_connection
+    logger.info("Database module loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load database module: {e}")
+    init_db = None
+    check_db_connection = None
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    """Startup event handler"""
+    logger.info("Starting Task Service...")
     
-    # Log request
-    logger.debug(f"📨 {request.method} {request.url.path} - Client: {request.client.host}")
+    # Initialize database if available
+    if init_db:
+        try:
+            for attempt in range(3):
+                try:
+                    if init_db():
+                        logger.info("Database initialized successfully")
+                        break
+                except Exception as e:
+                    logger.warning(f"Database init attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(5)
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
     
-    # Process request
-    try:
-        response = await call_next(request)
-        process_time = time.time() - start_time
-        
-        # Log response
-        logger.debug(
-            f"📤 {request.method} {request.url.path} - "
-            f"Status: {response.status_code} - "
-            f"Time: {process_time:.3f}s"
-        )
-        
-        # Add timing header
-        response.headers["X-Process-Time"] = str(process_time)
-        return response
-        
-    except Exception as e:
-        process_time = time.time() - start_time
-        logger.error(
-            f"❌ {request.method} {request.url.path} - "
-            f"Error: {str(e)} - "
-            f"Time: {process_time:.3f}s"
-        )
-        raise
+    logger.info("Task Service startup completed")
 
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with consistent error format."""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": {
-                "type": "http_error",
-                "status_code": exc.status_code,
-                "message": exc.detail,
-                "path": str(request.url.path),
-                "timestamp": time.time()
-            }
-        }
-    )
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unexpected exceptions."""
-    logger.exception(f"Unhandled exception in {request.method} {request.url.path}")
-    
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "error": {
-                "type": "internal_error",
-                "status_code": 500,
-                "message": "Internal server error" if not settings.debug else str(exc),
-                "path": str(request.url.path),
-                "timestamp": time.time()
-            }
-        }
-    )
-
-
-# Root endpoint
-@app.get("/", tags=["Root"])
-async def root() -> Dict[str, Any]:
-    """Root endpoint with service information."""
+# Basic endpoints
+@app.get("/")
+async def root():
+    """Root endpoint"""
     return {
-        "service": settings.service_name,
-        "version": settings.service_version,
+        "service": "task_service",
+        "version": "1.0.0",
         "status": "running",
-        "message": "Task Service is operational",
-        "docs_url": "/docs" if settings.debug else "Documentation disabled in production",
-        "timestamp": time.time()
+        "message": "Task Service is operational"
     }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        health_status = {
+            "service": "task_service",
+            "version": "1.0.0",
+            "status": "healthy"
+        }
+        
+        # Check database if available
+        if check_db_connection:
+            try:
+                db_healthy = check_db_connection()
+                health_status["database"] = "connected" if db_healthy else "disconnected"
+            except Exception as e:
+                health_status["database"] = f"error: {str(e)}"
+        
+        return health_status
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
+
+@app.get("/metrics")
+async def metrics():
+    """Metrics endpoint"""
+    return {
+        "service": "task_service",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+# Import and include task router
+try:
+    from .routers.tasks import router as task_router
+    app.include_router(
+        task_router, 
+        prefix=f"{settings.API_PREFIX}/tasks", 
+        tags=["tasks"]
+    )
+    logger.info("Task router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include task router: {e}")
+    # Add a debug endpoint to show the error
+    @app.get("/router-debug")
+    async def router_debug():
+        return {"error": f"Task router failed to load: {str(e)}"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
