@@ -4,4 +4,3 @@ SELECT 'CREATE DATABASE task_manager' WHERE NOT EXISTS (SELECT FROM pg_database 
 -- Connect to the database
 \c task_manager;
 
--- Create any additional setup here if needed
