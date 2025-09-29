@@ -1,7 +1,11 @@
+"""
+Pydantic schemas for Task Service.
+"""
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from enum import Enum
+
 
 class TaskStatus(str, Enum):
     """Task status enumeration for API"""
@@ -10,110 +14,70 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
 
+
 class TaskPriority(str, Enum):
     """Task priority enumeration for API"""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
-    URGENT = "urgent"
+
 
 class TaskBase(BaseModel):
     """Base task schema"""
     title: str = Field(..., min_length=1, max_length=200, description="Task title")
-    description: Optional[str] = Field(None, max_length=2000, description="Task description")
-    priority: TaskPriority = Field(TaskPriority.MEDIUM, description="Task priority")
+    description: Optional[str] = Field(None, max_length=1000, description="Task description")
+    priority: Optional[TaskPriority] = Field(TaskPriority.MEDIUM, description="Task priority")
     due_date: Optional[datetime] = Field(None, description="Task due date")
     tags: Optional[List[str]] = Field(default_factory=list, description="Task tags")
-    estimated_hours: Optional[int] = Field(None, ge=0, le=1000, description="Estimated hours")
 
-    @validator('tags')
-    def validate_tags(cls, v):
-        """Validate and clean tags"""
-        if v is None:
-            return []
-        # Remove empty strings and limit to 10 tags
-        clean_tags = [tag.strip() for tag in v if tag and tag.strip()]
-        return clean_tags[:10]
-
-    @validator('due_date')
-    def validate_due_date(cls, v):
-        """Validate due date is in the future"""
-        if v and v < datetime.now():
-            # Allow past dates but could add warning
-            pass
-        return v
 
 class TaskCreate(TaskBase):
     """Schema for creating a task"""
     pass
 
+
 class TaskUpdate(BaseModel):
     """Schema for updating a task"""
-    title: Optional[str] = Field(None, min_length=1, max_length=200)
-    description: Optional[str] = Field(None, max_length=2000)
-    status: Optional[TaskStatus] = None
-    priority: Optional[TaskPriority] = None
-    due_date: Optional[datetime] = None
-    tags: Optional[List[str]] = None
-    estimated_hours: Optional[int] = Field(None, ge=0, le=1000)
-    actual_hours: Optional[int] = Field(None, ge=0, le=1000)
+    title: Optional[str] = Field(None, min_length=1, max_length=200, description="Task title")
+    description: Optional[str] = Field(None, max_length=1000, description="Task description")
+    status: Optional[TaskStatus] = Field(None, description="Task status")
+    priority: Optional[TaskPriority] = Field(None, description="Task priority")
+    due_date: Optional[datetime] = Field(None, description="Task due date")
+    tags: Optional[List[str]] = Field(None, description="Task tags")
 
-    @validator('tags')
-    def validate_tags(cls, v):
-        """Validate and clean tags"""
-        if v is None:
-            return v
-        # Remove empty strings and limit to 10 tags
-        clean_tags = [tag.strip() for tag in v if tag and tag.strip()]
-        return clean_tags[:10] if clean_tags else None
-
-class TaskStatusUpdate(BaseModel):
-    """Schema for updating only task status"""
-    status: TaskStatus
 
 class TaskResponse(TaskBase):
-    """Schema for task responses"""
-    id: int
-    status: TaskStatus
-    user_id: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    actual_hours: Optional[int] = None
-
+    """Schema for task response"""
+    id: int = Field(..., description="Task ID")
+    status: TaskStatus = Field(..., description="Task status")
+    user_id: int = Field(..., description="User ID who owns the task")
+    created_at: datetime = Field(..., description="Task creation timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Task update timestamp")
+    completed_at: Optional[datetime] = Field(None, description="Task completion timestamp")
+    
     class Config:
         from_attributes = True
 
-class TaskListResponse(BaseModel):
-    """Schema for paginated task list responses"""
-    tasks: List[TaskResponse]
-    total: int
-    page: int
-    page_size: int
-    total_pages: int
 
 class TaskSummary(BaseModel):
     """Schema for task summary statistics"""
-    total_tasks: int
-    pending_tasks: int
-    in_progress_tasks: int
-    completed_tasks: int
-    cancelled_tasks: int
-    overdue_tasks: int
+    total_tasks: int = Field(..., description="Total number of tasks")
+    pending_tasks: int = Field(..., description="Number of pending tasks")
+    in_progress_tasks: int = Field(..., description="Number of in-progress tasks")
+    completed_tasks: int = Field(..., description="Number of completed tasks")
+    cancelled_tasks: int = Field(..., description="Number of cancelled tasks")
+    overdue_tasks: int = Field(..., description="Number of overdue tasks")
 
-class TaskFilter(BaseModel):
-    """Schema for task filtering"""
-    status: Optional[TaskStatus] = None
-    priority: Optional[TaskPriority] = None
-    tags: Optional[List[str]] = None
-    due_before: Optional[datetime] = None
-    due_after: Optional[datetime] = None
-    search: Optional[str] = Field(None, max_length=100, description="Search in title and description")
+
+class TaskList(BaseModel):
+    """Schema for paginated task list"""
+    tasks: List[TaskResponse] = Field(..., description="List of tasks")
+    total: int = Field(..., description="Total number of tasks")
+    skip: int = Field(..., description="Number of tasks skipped")
+    limit: int = Field(..., description="Number of tasks returned")
+    has_next: bool = Field(default=False, description="Whether there are more tasks")
     
-    # Pagination
-    page: int = Field(1, ge=1, description="Page number")
-    page_size: int = Field(20, ge=1, le=100, description="Items per page")
-    
-    # Sorting
-    sort_by: Optional[str] = Field("created_at", description="Field to sort by")
-    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$", description="Sort order")
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Calculate has_next based on total, skip, and limit
+        self.has_next = (self.skip + self.limit) < self.total

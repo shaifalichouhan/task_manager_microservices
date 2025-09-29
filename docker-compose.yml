@@ -56,6 +56,11 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
       - app_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Auth Service
   auth_service:
@@ -77,23 +82,67 @@ services:
     
     # Add this to your existing docker-compose.yml
   task_service:
-    build:
-      context: ./task_service
-      dockerfile: Dockerfile
+    build: ./task_service
     container_name: task_service
     ports:
       - "8002:8000"
-    volumes:
-      - ./task_service/.env:/app/.env
+    environment:
+      - DATABASE_URL=mysql+pymysql://taskuser:taskpassword@mysql_db:3306/task_manager
+      - AUTH_SERVICE_URL=http://auth_service:8000
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+      - DEBUG=True
     depends_on:
       mysql_db:
         condition: service_healthy
       auth_service:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy  # Wait for RabbitMQ to be healthy
     restart: unless-stopped
     networks:
       - app_network
 
+  api_gateway:
+    build: ./api_gateway
+    container_name: api_gateway
+    ports:
+      - "8000:8000"  # Main entry point
+    environment:
+      - AUTH_SERVICE_URL=http://auth_service:8000
+      - TASK_SERVICE_URL=http://task_service:8000
+      - NOTIFICATION_SERVICE_URL=http://notification_service:8000
+      - DEBUG=True
+    depends_on:
+      - auth_service
+      - task_service
+    restart: unless-stopped
+    networks:
+      - app_network
+
+      # Add this to your existing docker-compose.yml
+  notification_service:
+    build: ./notification_service
+    container_name: notification_service
+    ports:
+      - "8003:8000"
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+      - ENABLE_EMAIL_NOTIFICATIONS=False
+      - ENABLE_LOG_NOTIFICATIONS=True
+      - DEBUG=True
+    depends_on:
+      rabbitmq:
+        condition: service_healthy  # Wait for RabbitMQ to be healthy
+    restart: unless-stopped
+    networks:
+      - app_network
+    volumes:
+      - ./notification_logs:/app/logs
+      
 # Define the network
 networks:
   app_network:

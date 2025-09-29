@@ -1,7 +1,9 @@
+
 import logging
 import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from .core.rabbitmq import rabbitmq_publisher
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -10,8 +12,8 @@ logger = logging.getLogger(__name__)
 # Create FastAPI application
 app = FastAPI(
     title="Task Service",
-    version="1.0.0",
-    description="Task Management Microservice"
+    description="Microservice for task management with JWT authentication",
+    version="1.0.0"
 )
 
 # Add CORS middleware
@@ -23,50 +25,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import and initialize components with error handling
 try:
+    # Import settings
     from .core.config import get_settings
     settings = get_settings()
     logger.info("Settings loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load settings: {e}")
-    # Create minimal settings
-    class MinimalSettings:
-        API_PREFIX = "/api/v1"
-    settings = MinimalSettings()
-
-try:
+    
+    # Import database
     from .core.database import init_db, check_db_connection
     logger.info("Database module loaded successfully")
+    
+    # Import and include task router
+    from .routers import tasks
+    
+    # Use api_prefix instead of API_PREFIX
+    app.include_router(
+        tasks.router, 
+        prefix=settings.api_prefix + "/tasks",  # Use lowercase api_prefix
+        tags=["tasks"]
+    )
+    logger.info("Task router included successfully")
+    
 except Exception as e:
-    logger.error(f"Failed to load database module: {e}")
-    init_db = None
-    check_db_connection = None
+    logger.error(f"Failed to include task router: {e}")
 
-# Startup event
+
 @app.on_event("startup")
 async def startup_event():
-    """Startup event handler"""
+    """Initialize application on startup"""
     logger.info("Starting Task Service...")
-    
-    # Initialize database if available
-    if init_db:
-        try:
-            for attempt in range(3):
-                try:
-                    if init_db():
-                        logger.info("Database initialized successfully")
-                        break
-                except Exception as e:
-                    logger.warning(f"Database init attempt {attempt + 1} failed: {e}")
-                    if attempt < 2:
-                        time.sleep(5)
-        except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
+    try:
+        # Initialize database
+        if init_db():
+            logger.info("Database initialized successfully")
+        else:
+            logger.error("Database initialization failed")
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
     
     logger.info("Task Service startup completed")
 
-# Basic endpoints
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -77,53 +76,78 @@ async def root():
         "message": "Task Service is operational"
     }
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     try:
-        health_status = {
+        # Check database connection
+        db_healthy = check_db_connection()
+        
+        return {
             "service": "task_service",
             "version": "1.0.0",
-            "status": "healthy"
+            "status": "healthy" if db_healthy else "unhealthy",
+            "database": "connected" if db_healthy else "disconnected",
+            "timestamp": time.time()
         }
-        
-        # Check database if available
-        if check_db_connection:
-            try:
-                db_healthy = check_db_connection()
-                health_status["database"] = "connected" if db_healthy else "disconnected"
-            except Exception as e:
-                health_status["database"] = f"error: {str(e)}"
-        
-        return health_status
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
+        return {
+            "service": "task_service",
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": time.time()
+        }
 
-@app.get("/metrics")
-async def metrics():
-    """Metrics endpoint"""
-    return {
-        "service": "task_service",
-        "version": "1.0.0",
-        "status": "running"
-    }
 
-# Import and include task router
-try:
-    from .routers.tasks import router as task_router
-    app.include_router(
-        task_router, 
-        prefix=f"{settings.API_PREFIX}/tasks", 
-        tags=["tasks"]
-    )
-    logger.info("Task router included successfully")
-except Exception as e:
-    logger.error(f"Failed to include task router: {e}")
-    # Add a debug endpoint to show the error
-    @app.get("/router-debug")
-    async def router_debug():
-        return {"error": f"Task router failed to load: {str(e)}"}
+@app.get("/debug")
+async def debug_info():
+    """Debug information endpoint"""
+    try:
+        from .core.config import get_settings
+        settings = get_settings()
+        
+        return {
+            "settings": {
+                "service_name": settings.service_name,
+                "api_prefix": settings.api_prefix,  # Show the correct attribute name
+                "database_url": "***HIDDEN***",
+                "auth_service_url": settings.auth_service_url
+            },
+            "routes": [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize application on startup"""
+    logger.info("Starting Task Service...")
+    try:
+        # Initialize database
+        if init_db():
+            logger.info("Database initialized successfully")
+        else:
+            logger.error("Database initialization failed")
+        
+        # Initialize RabbitMQ connection
+        if rabbitmq_publisher.connect():
+            logger.info("RabbitMQ connection established")
+        else:
+            logger.warning("RabbitMQ connection failed - events will not be published")
+            
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
+    
+    logger.info("Task Service startup completed")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("Shutting down Task Service...")
+    rabbitmq_publisher.close()
+    logger.info("Task Service shutdown completed")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
